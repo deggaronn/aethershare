@@ -7,35 +7,45 @@ const CHUNK_SIZE = 64 * 1024; // 64 KB chunks
 const WINDOW_SIZE = 16;      // Maximum in-flight chunks (1 MB total buffer window)
 const CONNECTION_OPEN_TIMEOUT = 10000; // 10s to wait for data channel open
 
-// ICE servers config with STUN + free TURN for NAT traversal
-const ICE_CONFIG = {
+// ICE server configuration
+// For reliable cross-network transfers, sign up for free TURN at https://www.metered.ca/stun-turn
+// and replace the API key below. Without TURN, transfers only work on the same local network.
+const METERED_API_KEY = ''; // Paste your free metered.ca API key here
+
+const STUN_ONLY_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun.relay.metered.ca:80' },
-    {
-      urls: 'turn:global.relay.metered.ca:80',
-      username: 'e8dd65b92f6ee1da3d0b6b48',
-      credential: 'uH/thVNp8hts1Yaz'
-    },
-    {
-      urls: 'turn:global.relay.metered.ca:80?transport=tcp',
-      username: 'e8dd65b92f6ee1da3d0b6b48',
-      credential: 'uH/thVNp8hts1Yaz'
-    },
-    {
-      urls: 'turn:global.relay.metered.ca:443',
-      username: 'e8dd65b92f6ee1da3d0b6b48',
-      credential: 'uH/thVNp8hts1Yaz'
-    },
-    {
-      urls: 'turns:global.relay.metered.ca:443?transport=tcp',
-      username: 'e8dd65b92f6ee1da3d0b6b48',
-      credential: 'uH/thVNp8hts1Yaz'
-    }
-  ]
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
+  ],
+  iceCandidatePoolSize: 10
 };
+
+let cachedIceConfig = null;
+async function getIceConfig() {
+  if (cachedIceConfig) return cachedIceConfig;
+  
+  // Try to fetch TURN credentials from metered.ca if API key is configured
+  if (METERED_API_KEY) {
+    try {
+      const resp = await fetch(`https://aethershare.metered.live/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`);
+      if (resp.ok) {
+        const iceServers = await resp.json();
+        console.log('[AetherShare] Fetched', iceServers.length, 'TURN servers from metered.ca');
+        cachedIceConfig = { iceServers, iceCandidatePoolSize: 10 };
+        return cachedIceConfig;
+      }
+    } catch (err) {
+      console.warn('[AetherShare] TURN fetch failed:', err.message);
+    }
+  }
+  
+  console.log('[AetherShare] Using STUN-only config (same network / direct connections only)');
+  cachedIceConfig = STUN_ONLY_CONFIG;
+  return cachedIceConfig;
+}
 
 let connectionOpenTimer = null; // Timer to detect dead connections
 
@@ -189,16 +199,20 @@ function checkUrlHash() {
 }
 
 // --- Initialize PeerJS (Sender Mode) ---
-function initializeSenderPeer() {
+async function initializeSenderPeer() {
   updateConnectionStatus('connecting', 'Connecting to Aether network...');
+  
+  // Fetch TURN credentials dynamically
+  const iceConfig = await getIceConfig();
+  console.log('[AetherShare] Using ICE config with', iceConfig.iceServers.length, 'servers');
   
   // Generate a random, collisions-free room ID
   const randId = `aethershare-${Math.random().toString(36).substring(2, 9)}-${Math.random().toString(36).substring(2, 9)}`;
   console.log('[AetherShare] Sender: Initializing PeerJS with ID:', randId);
   
   peer = new Peer(randId, {
-    debug: 3,
-    config: ICE_CONFIG
+    debug: 2,
+    config: iceConfig
   });
 
   peer.on('open', (id) => {
@@ -250,8 +264,12 @@ function initializeSenderPeer() {
 }
 
 // --- Initialize PeerJS (Receiver Mode) ---
-function initializeReceiverPeer(roomId) {
+async function initializeReceiverPeer(roomId) {
   updateConnectionStatus('connecting', 'Connecting to Aether network...');
+  
+  // Fetch TURN credentials dynamically
+  const iceConfig = await getIceConfig();
+  console.log('[AetherShare] Using ICE config with', iceConfig.iceServers.length, 'servers');
   
   // Generate random receiver ID
   const receiverId = `aethershare-rcv-${Math.random().toString(36).substring(2, 9)}`;
@@ -259,8 +277,8 @@ function initializeReceiverPeer(roomId) {
   console.log('[AetherShare] Receiver: Will connect to sender room:', roomId);
   
   peer = new Peer(receiverId, {
-    debug: 3,
-    config: ICE_CONFIG
+    debug: 2,
+    config: iceConfig
   });
 
   peer.on('open', (myId) => {
