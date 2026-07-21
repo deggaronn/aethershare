@@ -5,6 +5,39 @@
 // --- Global Constants & Configurations ---
 const CHUNK_SIZE = 64 * 1024; // 64 KB chunks
 const WINDOW_SIZE = 16;      // Maximum in-flight chunks (1 MB total buffer window)
+const CONNECTION_OPEN_TIMEOUT = 10000; // 10s to wait for data channel open
+
+// ICE servers config with STUN + free TURN for NAT traversal
+const ICE_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun.relay.metered.ca:80' },
+    {
+      urls: 'turn:global.relay.metered.ca:80',
+      username: 'e8dd65b92f6ee1da3d0b6b48',
+      credential: 'uH/thVNp8hts1Yaz'
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+      username: 'e8dd65b92f6ee1da3d0b6b48',
+      credential: 'uH/thVNp8hts1Yaz'
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:443',
+      username: 'e8dd65b92f6ee1da3d0b6b48',
+      credential: 'uH/thVNp8hts1Yaz'
+    },
+    {
+      urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+      username: 'e8dd65b92f6ee1da3d0b6b48',
+      credential: 'uH/thVNp8hts1Yaz'
+    }
+  ]
+};
+
+let connectionOpenTimer = null; // Timer to detect dead connections
 
 // --- State Variables ---
 let myPeerId = null;
@@ -164,10 +197,8 @@ function initializeSenderPeer() {
   console.log('[AetherShare] Sender: Initializing PeerJS with ID:', randId);
   
   peer = new Peer(randId, {
-    host: '0.peerjs.com',
-    port: 443,
-    secure: true,
-    debug: 3 // Full debug logging
+    debug: 3,
+    config: ICE_CONFIG
   });
 
   peer.on('open', (id) => {
@@ -177,16 +208,34 @@ function initializeSenderPeer() {
   });
 
   peer.on('connection', (conn) => {
-    console.log('[AetherShare] Sender: Incoming connection from receiver! conn.open:', conn.open);
-    // Accept connection from receiver
+    console.log('[AetherShare] Sender: Incoming connection from receiver! conn.open:', conn.open, 'existing currentConnection:', !!currentConnection);
+    
+    // If we have a dead connection (never opened), replace it
+    if (currentConnection && !currentConnection.open) {
+      console.log('[AetherShare] Sender: Previous connection was dead (not open). Replacing with new one.');
+      clearTimeout(connectionOpenTimer);
+      try { currentConnection.close(); } catch(e) {}
+      currentConnection = null;
+    }
+    
     if (currentConnection) {
-      console.warn('[AetherShare] Sender: Already has a connection, rejecting.');
-      conn.close(); // Only support 1-to-1 transfer at a time
+      console.warn('[AetherShare] Sender: Already has an ACTIVE connection, rejecting new one.');
+      conn.close();
       return;
     }
     
     currentConnection = conn;
     setupConnectionListeners(conn);
+    
+    // Set a timeout: if data channel doesn't open in 10s, clear this dead connection
+    connectionOpenTimer = setTimeout(() => {
+      if (currentConnection === conn && !conn.open) {
+        console.warn('[AetherShare] Sender: Connection open timeout (10s). Clearing dead connection to allow retries.');
+        try { conn.close(); } catch(e) {}
+        currentConnection = null;
+        updateConnectionStatus('connected', 'Connected. Ready to share.');
+      }
+    }, CONNECTION_OPEN_TIMEOUT);
   });
 
   peer.on('error', (err) => {
@@ -196,7 +245,7 @@ function initializeSenderPeer() {
 
   peer.on('disconnected', () => {
     console.warn('[AetherShare] Sender: PeerJS disconnected from signaling server. Reconnecting...');
-    peer.reconnect();
+    if (peer && !peer.destroyed) peer.reconnect();
   });
 }
 
@@ -210,10 +259,8 @@ function initializeReceiverPeer(roomId) {
   console.log('[AetherShare] Receiver: Will connect to sender room:', roomId);
   
   peer = new Peer(receiverId, {
-    host: '0.peerjs.com',
-    port: 443,
-    secure: true,
-    debug: 3 // Full debug logging
+    debug: 3,
+    config: ICE_CONFIG
   });
 
   peer.on('open', (myId) => {
@@ -223,8 +270,7 @@ function initializeReceiverPeer(roomId) {
     // Connect to sender's room
     console.log('[AetherShare] Receiver: Calling peer.connect() to sender:', roomId);
     const conn = peer.connect(roomId, {
-      reliable: true,
-      serialization: 'binary'
+      reliable: true
     });
     
     console.log('[AetherShare] Receiver: conn created. conn.open:', conn.open);
@@ -251,7 +297,7 @@ function initializeReceiverPeer(roomId) {
 
   peer.on('disconnected', () => {
     console.warn('[AetherShare] Receiver: PeerJS disconnected from signaling server. Reconnecting...');
-    peer.reconnect();
+    if (peer && !peer.destroyed) peer.reconnect();
   });
 }
 
@@ -404,6 +450,7 @@ function setupConnectionListeners(conn) {
   
   const handleOpen = () => {
     console.log('[AetherShare] Connection OPEN! Role:', transferRole);
+    clearTimeout(connectionOpenTimer); // Cancel dead-connection timeout
     updateConnectionStatus('connected', 'Peer connected.');
     if (transferRole === 'sender') {
       console.log('[AetherShare] Sender: Sending file metadata:', activeFile.name, activeFile.size);
