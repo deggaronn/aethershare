@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AetherShare - Ultra-Fast P2P Large File Transfer</title>
+  <meta name="description" content="Send 20GB+ files over the internet instantly. Safe, secure, peer-to-peer WebRTC file transfer direct from browser to browser. No uploads, no installations.">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- QRCode.js for offline QR code generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- PeerJS CDN -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+  <!-- Decorative background elements -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+  
+  <div class="app-container">
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-logo">
+          <i data-lucide="zap" class="logo-icon"></i>
+        </div>
+        <div class="brand-text">
+          <h1>AetherShare</h1>
+          <span>High-Speed P2P Transfer</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div id="connection-status" class="status-badge status-disconnected">
+          <span class="status-dot"></span>
+          <span id="status-text">Connecting to network...</span>
+        </div>
+        <a href="https://github.com" target="_blank" class="github-link" title="View Source on GitHub">
+          <i data-lucide="github"></i>
+        </a>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <!-- Section 1: Dashboard (Initial State) -->
+      <section id="dashboard-section" class="panel-section active">
+        <div class="grid-layout">
+          <!-- Left Column: Sender Dropzone -->
+          <div class="card glass-panel dropzone-card">
+            <div class="card-header">
+              <h2 class="card-title"><i data-lucide="upload-cloud"></i> Send a File</h2>
+              <p class="card-subtitle">Select any file. Size is unlimited (e.g. 20 GB+). Files are streamed directly to the receiver.</p>
+            </div>
+            
+            <div class="card-body">
+              <div id="drop-zone" class="drop-zone">
+                <input type="file" id="file-input" class="file-input">
+                <div class="drop-zone-content">
+                  <div class="icon-pulse">
+                    <i data-lucide="folder-open" class="drop-icon"></i>
+                  </div>
+                  <p class="drop-text-primary">Drag & drop your file here</p>
+                  <p class="drop-text-secondary">or click to browse your computer</p>
+                  <span class="badge-size-limit">Unlimited Size</span>
+                </div>
+              </div>
+
+              <!-- Selected File Info (hidden initially) -->
+              <div id="file-info-container" class="file-info-container hidden">
+                <div class="file-info-card">
+                  <i data-lucide="file" class="file-icon"></i>
+                  <div class="file-metadata">
+                    <span id="file-name" class="file-name-txt">filename.zip</span>
+                    <span id="file-size" class="file-size-txt">0 Bytes</span>
+                  </div>
+                  <button id="remove-file-btn" class="btn-icon" title="Remove file">
+                    <i data-lucide="x"></i>
+                  </button>
+                </div>
+
+                <div class="transfer-options">
+                  <button id="initiate-transfer-btn" class="btn btn-primary btn-full">
+                    <i data-lucide="share-2"></i> Generate Transfer Link
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Info & Connectivity -->
+          <div class="card glass-panel info-card">
+            <div class="card-header">
+              <h2 class="card-title"><i data-lucide="help-circle"></i> How it works</h2>
+              <p class="card-subtitle">AetherShare uses WebRTC technology to connect devices directly.</p>
+            </div>
+            <div class="card-body info-list">
+              <div class="info-item">
+                <div class="info-icon-wrapper"><i data-lucide="shield-check"></i></div>
+                <div class="info-content">
+                  <h3>100% Private & Encrypted</h3>
+                  <p>Your files are sent directly between browsers using DTLS/SRTP encryption. No intermediate server store or cache.</p>
+                </div>
+              </div>
+              <div class="info-item">
+                <div class="info-icon-wrapper"><i data-lucide="gauge"></i></div>
+                <div class="info-content">
+                  <h3>Maximum Local Speeds</h3>
+                  <p>Transfer speeds are limited only by your internet or local network bandwidth. No artificial caps.</p>
+                </div>
+              </div>
+              <div class="info-item">
+                <div class="info-icon-wrapper"><i data-lucide="smartphone"></i></div>
+                <div class="info-content">
+                  <h3>No Installation Required</h3>
+                  <p>Works entirely in the web browser. No accounts, no software, and no plugins to install.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Share / Connection Options (After Sender selects file) -->
+      <section id="share-section" class="panel-section hidden">
+        <div class="card glass-panel max-width-card">
+          <div class="card-header centered-header">
+            <div class="success-ring animate-bounce">
+              <i data-lucide="link"></i>
+            </div>
+            <h2 class="card-title">Your File is Ready to Share!</h2>
+            <p class="card-subtitle">Keep this tab open. Send the link or scanning code below to the receiver to begin the transfer.</p>
+          </div>
+          
+          <div class="card-body">
+            <div class="share-methods">
+              <div class="share-link-wrapper">
+                <label for="share-url-input">Direct Link</label>
+                <div class="input-with-button">
+                  <input type="text" id="share-url-input" readonly value="https://aethershare.github.io/#room-id">
+                  <button id="copy-url-btn" class="btn btn-secondary">
+                    <i data-lucide="copy" class="btn-icon-left"></i> Copy
+                  </button>
+                </div>
+              </div>
+
+              <div class="qr-and-token-grid">
+                <div class="qr-container">
+                  <h4>Scan QR Code</h4>
+                  <div id="qrcode" class="qrcode-wrapper"></div>
+                  <p class="qr-help">Scan with phone or mobile browser</p>
+                </div>
+
+                <div class="token-container">
+                  <h4>Serverless / Manual Transfer</h4>
+                  <p class="token-help">If the automated connection fails, you can connect manually by exchanging connection text.</p>
+                  <button id="manual-connection-btn" class="btn btn-tertiary">
+                    <i data-lucide="settings"></i> Advanced Manual Setup
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="waiting-peer-banner">
+              <div class="pulse-ring"></div>
+              <p>Waiting for the receiver to connect...</p>
+            </div>
+
+            <div class="card-footer-actions">
+              <button id="back-to-dash-btn" class="btn btn-text">
+                <i data-lucide="arrow-left" class="btn-icon-left"></i> Back/Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 3: Receiver Landing (When opening via sharing URL) -->
+      <section id="receive-section" class="panel-section hidden">
+        <div class="card glass-panel max-width-card">
+          <div class="card-header centered-header">
+            <div class="download-ring">
+              <i data-lucide="download"></i>
+            </div>
+            <h2 class="card-title">Incoming File Transfer</h2>
+            <p class="card-subtitle">A peer is ready to send you a file directly. Choose where to save it to start.</p>
+          </div>
+
+          <div class="card-body">
+            <div id="incoming-file-card" class="file-info-card receive-file-details">
+              <i data-lucide="file-text" class="file-icon large"></i>
+              <div class="file-metadata">
+                <span id="incoming-file-name" class="file-name-txt font-large">fetching_name...</span>
+                <span id="incoming-file-size" class="file-size-txt">0 Bytes</span>
+              </div>
+            </div>
+
+            <!-- Browser compatibility alert -->
+            <div id="safari-warning" class="alert-box alert-warning hidden">
+              <i data-lucide="alert-triangle"></i>
+              <div>
+                <strong>Safari / Firefox detected:</strong> For files larger than 2GB, we recommend using a Chromium-based browser (Chrome, Edge, Opera) which supports direct disk streaming.
+              </div>
+            </div>
+
+            <div class="receiver-actions">
+              <button id="accept-transfer-btn" class="btn btn-primary btn-large btn-full animate-pulse-glow">
+                <i data-lucide="download-cloud"></i> Accept & Save File
+              </button>
+              <button id="reject-transfer-btn" class="btn btn-secondary btn-full">
+                Decline
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 4: Transfer Progress (Visible to both during transfer) -->
+      <section id="transfer-section" class="panel-section hidden">
+        <div class="card glass-panel max-width-card">
+          <div class="card-header">
+            <div class="transfer-header-row">
+              <div class="transfer-title-group">
+                <h2 id="transfer-direction-title" class="card-title">Transferring File...</h2>
+                <p id="transfer-file-title" class="card-subtitle truncate">filename.zip</p>
+              </div>
+              <span id="transfer-mode-badge" class="badge-accent">P2P Stream</span>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <!-- Large Ring Progress Indicator -->
+            <div class="progress-ring-container">
+              <svg class="progress-ring" width="200" height="200">
+                <circle class="progress-ring__circle-bg" stroke="rgba(255, 255, 255, 0.05)" stroke-width="8" fill="transparent" r="85" cx="100" cy="100"/>
+                <circle id="progress-ring-bar" class="progress-ring__circle" stroke="url(#progress-gradient)" stroke-width="8" stroke-dasharray="534" stroke-dashoffset="534" fill="transparent" r="85" cx="100" cy="100"/>
+                <defs>
+                  <linearGradient id="progress-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#6366f1" />
+                    <stop offset="100%" stop-color="#a855f7" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div class="progress-label-overlay">
+                <span id="progress-percentage" class="percentage-txt">0%</span>
+                <span id="transfer-speed" class="speed-txt">0.0 MB/s</span>
+              </div>
+            </div>
+
+            <!-- Detailed Stats Grid -->
+            <div class="stats-grid">
+              <div class="stat-box">
+                <span class="stat-label">Time Remaining</span>
+                <span id="stat-eta" class="stat-val">Calculating...</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-label">Transferred</span>
+                <span id="stat-transferred" class="stat-val">0 MB / 0 MB</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-label">Elapsed Time</span>
+                <span id="stat-elapsed" class="stat-val">00:00</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-label">Network Status</span>
+                <span id="stat-network" class="stat-val">Optimal P2P</span>
+              </div>
+            </div>
+
+            <!-- Buffer status (crucial for backpressure diagnostics) -->
+            <div class="buffer-status-row">
+              <span class="buffer-dot green" id="buffer-indicator-dot"></span>
+              <span id="buffer-status-text" class="buffer-txt">Streaming data smoothly</span>
+            </div>
+
+            <div class="transfer-actions">
+              <button id="cancel-transfer-btn" class="btn btn-danger btn-full">
+                <i data-lucide="circle-slash"></i> Cancel Transfer
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 5: Manual Connection Setup (Advanced/Fallback Modal) -->
+      <section id="manual-modal-section" class="panel-section hidden">
+        <div class="card glass-panel max-width-card">
+          <div class="card-header">
+            <h2 class="card-title"><i data-lucide="settings"></i> Manual WebRTC Signaling</h2>
+            <p class="card-subtitle">Connect completely serverless without any signaling server by copying and pasting session descriptors.</p>
+          </div>
+          
+          <div class="card-body">
+            <div class="manual-steps">
+              <div class="step-card">
+                <span class="step-num">1</span>
+                <h3>Generate / Paste local offer</h3>
+                <textarea id="manual-local-sdp" placeholder="Your connection descriptor will appear here..." readonly onclick="this.select()"></textarea>
+                <button id="copy-local-sdp-btn" class="btn btn-secondary btn-small">Copy Local Code</button>
+              </div>
+
+              <div class="step-card">
+                <span class="step-num">2</span>
+                <h3>Paste remote response</h3>
+                <textarea id="manual-remote-sdp" placeholder="Paste the receiver's connection code here and click Connect..."></textarea>
+                <button id="connect-remote-sdp-btn" class="btn btn-primary btn-small">Connect to Peer</button>
+              </div>
+            </div>
+
+            <div class="card-footer-actions">
+              <button id="close-manual-btn" class="btn btn-text">
+                <i data-lucide="arrow-left" class="btn-icon-left"></i> Back to automatic
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <div class="footer-content">
+        <p>AetherShare uses end-to-end direct WebRTC data channels. Files are never stored on any server.</p>
+        <p>&copy; 2026 AetherShare. Open Source under MIT License.</p>
+      </div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
