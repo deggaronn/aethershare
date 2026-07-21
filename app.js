@@ -135,10 +135,18 @@ function checkBrowserCapabilities() {
 // --- Check URL Hash ---
 function checkUrlHash() {
   const hash = window.location.hash;
+  console.log('[AetherShare] Hash:', hash);
   if (hash && hash.startsWith('#/receive/')) {
     const roomId = hash.replace('#/receive/', '');
+    console.log('[AetherShare] Receiver mode detected. Sender Room ID:', roomId);
     if (roomId) {
       transferRole = 'receiver';
+      // Immediately show a connecting state to the user
+      elIncomingFileName.textContent = 'Connecting to sender...';
+      elIncomingFileSize.textContent = 'Please wait';
+      btnAcceptTransfer.classList.add('hidden');
+      btnRejectTransfer.classList.add('hidden');
+      switchPanel(secReceive);
       initializeReceiverPeer(roomId);
     }
   } else {
@@ -153,22 +161,26 @@ function initializeSenderPeer() {
   
   // Generate a random, collisions-free room ID
   const randId = `aethershare-${Math.random().toString(36).substring(2, 9)}-${Math.random().toString(36).substring(2, 9)}`;
+  console.log('[AetherShare] Sender: Initializing PeerJS with ID:', randId);
   
   peer = new Peer(randId, {
     host: '0.peerjs.com',
     port: 443,
     secure: true,
-    debug: 1 // Only errors
+    debug: 3 // Full debug logging
   });
 
   peer.on('open', (id) => {
+    console.log('[AetherShare] Sender: PeerJS OPEN. My Peer ID:', id);
     myPeerId = id;
     updateConnectionStatus('connected', 'Connected. Ready to share.');
   });
 
   peer.on('connection', (conn) => {
+    console.log('[AetherShare] Sender: Incoming connection from receiver! conn.open:', conn.open);
     // Accept connection from receiver
     if (currentConnection) {
+      console.warn('[AetherShare] Sender: Already has a connection, rejecting.');
       conn.close(); // Only support 1-to-1 transfer at a time
       return;
     }
@@ -178,8 +190,13 @@ function initializeSenderPeer() {
   });
 
   peer.on('error', (err) => {
-    console.error('PeerJS error:', err);
-    updateConnectionStatus('disconnected', 'Network connection error.');
+    console.error('[AetherShare] Sender: PeerJS error:', err.type, err);
+    updateConnectionStatus('disconnected', `Network error: ${err.type}`);
+  });
+
+  peer.on('disconnected', () => {
+    console.warn('[AetherShare] Sender: PeerJS disconnected from signaling server. Reconnecting...');
+    peer.reconnect();
   });
 }
 
@@ -189,29 +206,52 @@ function initializeReceiverPeer(roomId) {
   
   // Generate random receiver ID
   const receiverId = `aethershare-rcv-${Math.random().toString(36).substring(2, 9)}`;
+  console.log('[AetherShare] Receiver: Initializing PeerJS with ID:', receiverId);
+  console.log('[AetherShare] Receiver: Will connect to sender room:', roomId);
   
   peer = new Peer(receiverId, {
     host: '0.peerjs.com',
     port: 443,
     secure: true,
-    debug: 1
+    debug: 3 // Full debug logging
   });
 
-  peer.on('open', () => {
+  peer.on('open', (myId) => {
+    console.log('[AetherShare] Receiver: PeerJS OPEN. My Peer ID:', myId);
     updateConnectionStatus('connecting', 'Connecting to sender...');
     
     // Connect to sender's room
+    console.log('[AetherShare] Receiver: Calling peer.connect() to sender:', roomId);
     const conn = peer.connect(roomId, {
-      reliable: true
+      reliable: true,
+      serialization: 'binary'
     });
     
+    console.log('[AetherShare] Receiver: conn created. conn.open:', conn.open);
     currentConnection = conn;
     setupConnectionListeners(conn);
+    
+    // Set a connection timeout — if no data received in 15s, warn user
+    setTimeout(() => {
+      if (!activeFile || !activeFile.size) {
+        console.warn('[AetherShare] Receiver: Connection timeout. No metadata received in 15s.');
+        updateConnectionStatus('disconnected', 'Connection timed out. Sender may be offline.');
+        elIncomingFileName.textContent = 'Connection failed';
+        elIncomingFileSize.textContent = 'The sender may be offline or the link has expired. Please request a new link.';
+      }
+    }, 15000);
   });
 
   peer.on('error', (err) => {
-    console.error('Receiver PeerJS error:', err);
-    updateConnectionStatus('disconnected', 'Failed to connect to sender.');
+    console.error('[AetherShare] Receiver: PeerJS error:', err.type, err);
+    updateConnectionStatus('disconnected', `Connection failed: ${err.type}`);
+    elIncomingFileName.textContent = 'Connection failed';
+    elIncomingFileSize.textContent = `Error: ${err.type}. The sender may be offline.`;
+  });
+
+  peer.on('disconnected', () => {
+    console.warn('[AetherShare] Receiver: PeerJS disconnected from signaling server. Reconnecting...');
+    peer.reconnect();
   });
 }
 
@@ -360,9 +400,13 @@ function startSharingMode() {
 
 // --- Setup Peer Connection Listeners ---
 function setupConnectionListeners(conn) {
+  console.log('[AetherShare] setupConnectionListeners called. Role:', transferRole, 'conn.open:', conn.open);
+  
   const handleOpen = () => {
+    console.log('[AetherShare] Connection OPEN! Role:', transferRole);
     updateConnectionStatus('connected', 'Peer connected.');
     if (transferRole === 'sender') {
+      console.log('[AetherShare] Sender: Sending file metadata:', activeFile.name, activeFile.size);
       // Send file metadata
       conn.send({
         type: 'meta',
@@ -372,16 +416,23 @@ function setupConnectionListeners(conn) {
     }
   };
 
+  // Handle race: conn may already be open
   if (conn.open) {
+    console.log('[AetherShare] conn.open is already true, calling handleOpen immediately');
     handleOpen();
-  } else {
-    conn.on('open', handleOpen);
   }
+  // Always register the listener too, in case conn.open was a stale false
+  conn.on('open', () => {
+    console.log('[AetherShare] conn.on(open) event fired');
+    handleOpen();
+  });
 
   conn.on('data', async (data) => {
+    console.log('[AetherShare] Data received. Type:', typeof data, 'Is ArrayBuffer:', data instanceof ArrayBuffer, 'data.type:', data?.type);
+    
     // If receiving raw array buffer chunks
     if (data instanceof ArrayBuffer || (data.buffer && data.buffer instanceof ArrayBuffer)) {
-      const buffer = data.buffer || data;
+      const buffer = data instanceof ArrayBuffer ? data : data.buffer;
       await handleIncomingChunk(buffer);
       return;
     }
@@ -389,6 +440,7 @@ function setupConnectionListeners(conn) {
     // Otherwise, parse control JSON message
     switch (data.type) {
       case 'meta':
+        console.log('[AetherShare] Received file metadata:', data.name, data.size);
         // Receiver panel gets meta
         totalBytesToTransfer = data.size;
         elIncomingFileName.textContent = data.name;
@@ -396,10 +448,14 @@ function setupConnectionListeners(conn) {
         
         // Save details temporarily
         activeFile = { name: data.name, size: data.size };
+        // Show accept/reject buttons
+        btnAcceptTransfer.classList.remove('hidden');
+        btnRejectTransfer.classList.remove('hidden');
         switchPanel(secReceive);
         break;
         
       case 'accept':
+        console.log('[AetherShare] Receiver accepted the transfer.');
         // Receiver accepted, sender starts transmitting
         if (transferRole === 'sender') {
           startFileTransmission();
@@ -424,6 +480,7 @@ function setupConnectionListeners(conn) {
   });
 
   conn.on('close', () => {
+    console.log('[AetherShare] Connection closed.');
     if (isTransferring) {
       alert('Connection lost. Transfer interrupted.');
     }
@@ -431,7 +488,7 @@ function setupConnectionListeners(conn) {
   });
 
   conn.on('error', (err) => {
-    console.error('Connection error:', err);
+    console.error('[AetherShare] Connection error:', err);
     resetToDashboard();
   });
 }
