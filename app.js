@@ -360,9 +360,8 @@ function startSharingMode() {
 
 // --- Setup Peer Connection Listeners ---
 function setupConnectionListeners(conn) {
-  updateConnectionStatus('connected', 'Peer connected.');
-  
-  conn.on('open', () => {
+  const handleOpen = () => {
+    updateConnectionStatus('connected', 'Peer connected.');
     if (transferRole === 'sender') {
       // Send file metadata
       conn.send({
@@ -371,7 +370,13 @@ function setupConnectionListeners(conn) {
         size: activeFile.size
       });
     }
-  });
+  };
+
+  if (conn.open) {
+    handleOpen();
+  } else {
+    conn.on('open', handleOpen);
+  }
 
   conn.on('data', async (data) => {
     // If receiving raw array buffer chunks
@@ -942,7 +947,7 @@ function setupManualChannelListeners(channel) {
     close: () => channel.close()
   };
   
-  channel.onopen = () => {
+  const handleOpen = () => {
     currentConnection = mockConn;
     if (transferRole === 'sender') {
       mockConn.send(JSON.stringify({
@@ -952,6 +957,12 @@ function setupManualChannelListeners(channel) {
       }));
     }
   };
+
+  if (channel.readyState === 'open') {
+    handleOpen();
+  } else {
+    channel.onopen = handleOpen;
+  }
   
   channel.onmessage = async (event) => {
     const data = event.data;
